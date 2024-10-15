@@ -1,0 +1,5 @@
+compile: pick_my_password.c
+	gcc -o pick_my_password.o pick_my_password.c 
+
+clean: 
+	rm -rf *.o

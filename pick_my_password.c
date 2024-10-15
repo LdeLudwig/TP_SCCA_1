@@ -2,11 +2,24 @@
 #include <string.h>
 #include <crypt.h>
 #include <stdlib.h>
+#include <pthread.h>
+#include <semaphore.h>
 
 #define MAX_PASSWORDS 15000000
 #define MAX_PASSWORD_LENGTH 128
+#define BUFFER_SIZE 1000;
+
+int num_consumers; 
+int password_found = 0;
+char salt[12];
+
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+sem_t full;
+sem_t empty;
+
 
 char **password_list;
+
 
 int loadpasswd(const char* filename){
     char passwd[MAX_PASSWORD_LENGTH];
@@ -29,27 +42,43 @@ int loadpasswd(const char* filename){
     return i;
 }
 
+void *producer(void *arg){
+    int npasswd = *(int *) arg;
+
+
+}
+
+void *consumer(void *arg){
+
+}
+
 int main(int argc, char* argv[]){
-    //The password hash from the shadow file (user-provided example)
-    char *shadow_hash;
-    char salt[12];
+    int con_num = atoi(argv[1]);
+
 
     if(argc < 3){
         printf("Usage: %s <hash> <dict file>\n", argv[0]);
         return 1;
     }
 
+    //The password hash from the shadow file (user-provided example)
+    char *shadow_hash;
+    char salt[12];
+    struct crypt_data encrypted_data;
+
     int npasswd = loadpasswd(argv[2]);
+    
+    
+    shadow_hash = argv[0];
 
-    shadow_hash = argv[1];
-
-    // Extracting the salt from the shadow_hash, it includes "$1$"...
+    // Extracting the salt from the shadow_hash, it includes "$1$"
     strncpy(salt, shadow_hash, 11);
     salt[11] = '\0'; // Ensure null termintation
 
     for (int i=0; i<npasswd; i++){
         //Utilizar crypt_r() aqui
         char *new_hash = crypt(password_list[i], salt);
+        printf("%s\n", new_hash);
         if(strcmp(shadow_hash, new_hash) == 0){
             printf("Password found: %s\n", password_list[i]);
             return 0;
@@ -59,4 +88,4 @@ int main(int argc, char* argv[]){
     printf("Password not found!");
 
     return 0;
-}
+}   
