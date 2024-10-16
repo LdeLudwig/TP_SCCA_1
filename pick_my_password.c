@@ -9,24 +9,32 @@
 #define MAX_PASSWORD_LENGTH 128
 #define BUFFER_SIZE 1000
 
-int num_consumers; 
+
+int num_consumers;
 int password_found = 0;
 int count = 0;
 
 char salt[12];
 
+// Semaphores and mutex initialization
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 sem_t full;
 sem_t empty;
+
 
 char **password_list;
 char *buffer[BUFFER_SIZE];
 int buffer_index;
 
+char *shadow_hash;
+char salt[12];
+struct crypt_data encrypted_data;
+
 
 int loadpasswd(const char* filename){
     char passwd[MAX_PASSWORD_LENGTH];
     FILE* file = fopen(filename, "r");
+
     if(file == NULL){
         perror("fopen():");
         return -1;
@@ -61,7 +69,8 @@ void *producer(void *arg){
         buffer_index = (buffer_index + 1) % BUFFER_SIZE;
         count++;
 
-        sem_signal(&empty); // Notifica consumidores
+        // Notifica consumidores
+        sem_signal(&empty); 
         pthread_mutex_unlock(&mutex);
     }
 
@@ -73,66 +82,91 @@ void *consumer(void *arg){
         pthread_mutex_lock(&mutex);
         while(count == 0 && !password_found){
             sem_wait(&empty);
+            sem_signal(&full);
         }
 
         if(password_found){
             pthread_mutex_unlock(&mutex);
         }
+        
+        //geting password from buffer
+        char *password = *(char *)buffer[buffer_index - count + BUFFER_SIZE] % BUFFER_SIZE;
+        count--;
+
+        //The password hash from the shadow file (user-provided example)
+        pthread_mutex_unlock(&mutex);
+
+        //Notify producer
+        sem_signal(&full);
+
+        //Setting crypt_data to 0;
+        encrypted_data.initialized = 0;
+        
+        //Utilizar crypt_r() aqui
+        char *new_hash = crypt_r(password, salt, &encrypted_data);
+
+        if(strcmp(shadow_hash, new_hash) == 0){
+                printf("Password found: %s\n", password);
+                password_found = 1;
+                
+                break;
+            }
+        return NULL;
     }
-
-    char *password = *(char *)buffer[buffer_index - count + BUFFER_SIZE] % BUFFER_SIZE;
-
-    
-
-
 }
 
 int main(int argc, char* argv[]){
-    //producer thread
-    pthread_t prod_thread;
-    
 
-    //Get dictionary name
-    char filename = *(char *) argv[2];
-    int npasswd = loadpasswd(filename);
-    
-    if(npasswd == -1){
-        return 1;
-    }
-
-    pthread_create(&prod_thread, NULL, producer, &npasswd);
-
-    int con_num = atoi(argv[1]);
-
-
+    //Checking number of args
     if(argc < 3){
         printf("Usage: %s <hash> <dict file>\n", argv[0]);
         return 1;
     }
 
-    //The password hash from the shadow file (user-provided example)
-    char *shadow_hash;
-    char salt[12];
-    struct crypt_data encrypted_data;
+    //Getting dictionary name
+    char filename = *(char *) argv[2];
 
-
-    shadow_hash = argv[0];
+    //Getting number of consumers
+    int num_consumers = atoi(argv[1]);
 
     // Extracting the salt from the shadow_hash, it includes "$1$"
     strncpy(salt, shadow_hash, 11);
     salt[11] = '\0'; // Ensure null termintation
-
-    for (int i=0; i<npasswd; i++){
-            //Utilizar crypt_r() aqui
-            char *new_hash = crypt(password_list[i], salt);
-            if(strcmp(shadow_hash, new_hash) == 0){
-                printf("Password found: %s\n", password_list[i]);
-                password_found = 1;
-            }
-        }
     
+    //Checking if loadpasswd was succesfull
+    int npasswd = loadpasswd(filename);
+    if(npasswd == -1){
+        return 1;
+    }
 
-    printf("Password not found!");
+    //producer thread
+    pthread_t prod_thread;
+    pthread_create(&prod_thread, NULL, producer, &npasswd);
+
+    //multiples consumer threads
+    pthread_t cons_threads[num_consumers];
+    for(int i=0; i < num_consumers; i++){
+        pthread_create(&cons_threads[i], NULL, consumer, NULL);
+    }
+
+    //Waiting until producer thread finish fulfill the buffer
+    pthread_join(prod_thread, NULL);
+
+    //Waiting until consumer threads finish empty the buffer
+    for(int i=0; i<num_consumers ; i++){
+        pthread_join(&cons_threads[i],NULL);
+    }
+
+    
+    if(!password_found){
+        printf("Password not found!\n");
+    }
+
+    //freeing memory of passwordlist as producer take a batch of password on rockyou.txt
+    for(int i=0; i<npasswd; i++){
+        free(password_list[i]);
+    }
+    free(password_list);
 
     return 0;
 }   
