@@ -25,12 +25,13 @@ sem_t empty;
 
 char **password_list;
 char *buffer[BUFFER_SIZE];
-int buffer_index;
+int buffer_index = 0;
 
 char *shadow_hash;
 char salt[12];
 struct crypt_data encrypted_data;
 
+//list to store found passwords
 char *passwd_found[PASSWD_FOUND_LIST];
 int passwd_found_index = 0;
 
@@ -63,7 +64,7 @@ void *producer(void *arg){
         pthread_mutex_lock(&mutex);
         sem_wait(&empty);
         while(count == BUFFER_SIZE){
-            sem_signal(&empty); // Notify consumers
+            sem_post(&empty); // Notify consumers
             sem_wait(&full); // Producer wait until buffer be empty
         }
 
@@ -73,7 +74,7 @@ void *producer(void *arg){
         count++;
 
         // Notify consumers
-        sem_signal(&empty);
+        sem_post(&empty);
 
         pthread_mutex_unlock(&mutex);
     }
@@ -86,7 +87,7 @@ void *consumer(void *arg){
         pthread_mutex_lock(&mutex);
         while(count == 0 && !password_found){
             sem_wait(&empty);
-            sem_signal(&full);
+            sem_post(&full);
         }
 
         if(password_found){
@@ -94,27 +95,31 @@ void *consumer(void *arg){
         }
         
         //geting password from buffer
-        char *password = *(char *)buffer[buffer_index - count + BUFFER_SIZE] % BUFFER_SIZE;
+        char password = *(char *)buffer[buffer_index - count + BUFFER_SIZE] % BUFFER_SIZE;
         count--;
 
         //The password hash from the shadow file (user-provided example)
         pthread_mutex_unlock(&mutex);
 
         //Notify producer
-        sem_signal(&full);
+        sem_post(&full);
 
         //Setting crypt_data to 0;
         encrypted_data.initialized = 0;
+
+        // Extracting the salt from the shadow_hash, it includes "$1$"
+        strncpy(salt, shadow_hash, 11);
+        salt[11] = '\0'; // Ensure null termintation
         
         //Utilizar crypt_r() aqui
-        char *new_hash = crypt_r(password, salt, &encrypted_data);
+        char *new_hash = crypt_r(&password, salt, &encrypted_data);
 
         if(strcmp(shadow_hash, new_hash) == 0){
-                printf("Password found: %s\n", password);
+                printf("Password found: %s\n", &password);
                 password_found = 1;
 
                 // Putting found password in a buffer  
-                passwd_found[passwd_found_index] = password;
+                passwd_found[passwd_found_index] = &password;
                 passwd_found_index++;
                 break;
             }
@@ -136,14 +141,11 @@ int main(int argc, char* argv[]){
     //Getting number of consumers
     int num_consumers = atoi(argv[1]);
 
+    //Setting number of threads as shadow_hash to add in salt string
     shadow_hash = argv[1];
-
-    // Extracting the salt from the shadow_hash, it includes "$1$"
-    strncpy(salt, shadow_hash, 11);
-    salt[11] = '\0'; // Ensure null termintation
     
     //Checking if loadpasswd was succesfull
-    int npasswd = loadpasswd(filename);
+    int npasswd = loadpasswd(&filename);
     if(npasswd == -1){
         return 1;
     }
@@ -163,7 +165,7 @@ int main(int argc, char* argv[]){
 
     //Waiting until consumer threads finish empty the buffer
     for(int i=0; i<num_consumers ; i++){
-        pthread_join(&cons_threads[i],NULL);
+        pthread_join(cons_threads[i],NULL);
     }
 
     
