@@ -7,18 +7,22 @@
 
 #define MAX_PASSWORDS 15000000
 #define MAX_PASSWORD_LENGTH 128
-#define BUFFER_SIZE 1000;
+#define BUFFER_SIZE 1000
 
 int num_consumers; 
 int password_found = 0;
+int count = 0;
+
 char salt[12];
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 sem_t full;
 sem_t empty;
 
-
 char **password_list;
+char *buffer[BUFFER_SIZE];
+int buffer_index;
+
 
 
 int loadpasswd(const char* filename){
@@ -33,7 +37,7 @@ int loadpasswd(const char* filename){
     int i = 0;
 
     while(i < MAX_PASSWORDS && fgets(passwd, MAX_PASSWORD_LENGTH, file) != NULL){
-        passwd[strcspn(passwd,"|n")] = 0; // Remove newline
+        passwd[strcspn(passwd,"\n")] = 0; // Remove newline
         password_list[i] = strdup(passwd);
         i++;
     }
@@ -45,7 +49,22 @@ int loadpasswd(const char* filename){
 void *producer(void *arg){
     int npasswd = *(int *) arg;
 
+    sem_wait(&full);
 
+    for(int i = 0; i < npasswd; i++){
+        pthread_mutex_lock(&mutex);
+        while(count == BUFFER_SIZE){
+            sem_wait(&full); // Producer wait until buffer be empty
+        }
+
+        // Coloca senha no buffer
+        buffer[buffer_index] = password_list[i];
+        buffer_index = (buffer_index + 1) % BUFFER_SIZE;
+        count++;
+
+        sem_signal(&empty); // Notifica consumidores
+        pthread_mutex_unlock(&mutex);
+    }
 }
 
 void *consumer(void *arg){
@@ -53,6 +72,19 @@ void *consumer(void *arg){
 }
 
 int main(int argc, char* argv[]){
+    //producer thread
+    pthread_t prod_thread;
+
+    //Get dictionary name
+    char filename = *(char *) argv[2];
+    int npasswd = loadpasswd(filename);
+    
+    if(npasswd == -1){
+        return 1;
+    }
+
+    pthread_create(&prod_thread, NULL, producer, &npasswd);
+
     int con_num = atoi(argv[1]);
 
 
@@ -66,9 +98,7 @@ int main(int argc, char* argv[]){
     char salt[12];
     struct crypt_data encrypted_data;
 
-    int npasswd = loadpasswd(argv[2]);
-    
-    
+
     shadow_hash = argv[0];
 
     // Extracting the salt from the shadow_hash, it includes "$1$"
@@ -78,7 +108,6 @@ int main(int argc, char* argv[]){
     for (int i=0; i<npasswd; i++){
         //Utilizar crypt_r() aqui
         char *new_hash = crypt(password_list[i], salt);
-        printf("%s\n", new_hash);
         if(strcmp(shadow_hash, new_hash) == 0){
             printf("Password found: %s\n", password_list[i]);
             return 0;
