@@ -8,6 +8,7 @@
 #define MAX_PASSWORDS 15000000
 #define MAX_PASSWORD_LENGTH 128
 #define BUFFER_SIZE 1000
+#define PASSWD_FOUND_LIST 500
 
 
 int num_consumers;
@@ -30,6 +31,8 @@ char *shadow_hash;
 char salt[12];
 struct crypt_data encrypted_data;
 
+char *passwd_found[PASSWD_FOUND_LIST];
+int passwd_found_index = 0;
 
 int loadpasswd(const char* filename){
     char passwd[MAX_PASSWORD_LENGTH];
@@ -56,21 +59,22 @@ int loadpasswd(const char* filename){
 void *producer(void *arg){
     int npasswd = *(int *) arg;
 
-    sem_wait(&full);
-
     for(int i = 0; i < npasswd; i++){
         pthread_mutex_lock(&mutex);
+        sem_wait(&empty);
         while(count == BUFFER_SIZE){
+            sem_signal(&empty); // Notify consumers
             sem_wait(&full); // Producer wait until buffer be empty
         }
 
-        // Coloca senha no buffer
+        // Put passwd in the buffer
         buffer[buffer_index] = password_list[i];
         buffer_index = (buffer_index + 1) % BUFFER_SIZE;
         count++;
 
-        // Notifica consumidores
-        sem_signal(&empty); 
+        // Notify consumers
+        sem_signal(&empty);
+
         pthread_mutex_unlock(&mutex);
     }
 
@@ -108,7 +112,10 @@ void *consumer(void *arg){
         if(strcmp(shadow_hash, new_hash) == 0){
                 printf("Password found: %s\n", password);
                 password_found = 1;
-                
+
+                // Putting found password in a buffer  
+                passwd_found[passwd_found_index] = password;
+                passwd_found_index++;
                 break;
             }
         return NULL;
@@ -123,11 +130,13 @@ int main(int argc, char* argv[]){
         return 1;
     }
 
-    //Getting dictionary name
+    //Getting dict name
     char filename = *(char *) argv[2];
 
     //Getting number of consumers
     int num_consumers = atoi(argv[1]);
+
+    shadow_hash = argv[1];
 
     // Extracting the salt from the shadow_hash, it includes "$1$"
     strncpy(salt, shadow_hash, 11);
