@@ -63,6 +63,8 @@ void *producer(void *arg){
     for(int i = 0; i < npasswd; i++){
         pthread_mutex_lock(&mutex);
         sem_wait(&empty);
+
+
         while(count == BUFFER_SIZE){
             sem_post(&empty); // Notify consumers
             sem_wait(&full); // Producer wait until buffer be empty
@@ -73,10 +75,11 @@ void *producer(void *arg){
         buffer_index = (buffer_index + 1) % BUFFER_SIZE;
         count++;
 
-        // Notify consumers
-        sem_post(&empty);
-
+        //Free mutex
         pthread_mutex_unlock(&mutex);
+
+        //buffer 
+        sem_post(&full);
     }
 
     return NULL;
@@ -84,7 +87,9 @@ void *producer(void *arg){
 
 void *consumer(void *arg){
     while(!password_found){
+        sem_wait(&full);
         pthread_mutex_lock(&mutex);
+
         while(count == 0 && !password_found){
             sem_wait(&empty);
             sem_post(&full);
@@ -92,6 +97,8 @@ void *consumer(void *arg){
 
         if(password_found){
             pthread_mutex_unlock(&mutex);
+            sem_post(&full);
+            break;
         }
         
         //geting password from buffer
@@ -101,8 +108,8 @@ void *consumer(void *arg){
         //The password hash from the shadow file (user-provided example)
         pthread_mutex_unlock(&mutex);
 
-        //Notify producer
-        sem_post(&full);
+        //BUffer has space
+        sem_post(&empty);
 
         //Setting crypt_data to 0;
         encrypted_data.initialized = 0;
@@ -113,11 +120,11 @@ void *consumer(void *arg){
         
         //Utilizar crypt_r() aqui
         char *new_hash = crypt_r(&password, salt, &encrypted_data);
+        printf("%s", new_hash);
 
         if(strcmp(shadow_hash, new_hash) == 0){
                 printf("Password found: %s\n", &password);
                 password_found = 1;
-
                 // Putting found password in a buffer  
                 passwd_found[passwd_found_index] = &password;
                 passwd_found_index++;
@@ -135,17 +142,20 @@ int main(int argc, char* argv[]){
         return 1;
     }
 
+    printf("broo please");
     //Getting dict name
-    char filename = *(char *) argv[2];
+    char *filename = argv[2];
+    printf("%s",filename);
 
     //Getting number of consumers
     int num_consumers = atoi(argv[1]);
 
     //Setting number of threads as shadow_hash to add in salt string
     shadow_hash = argv[1];
+    printf("%s",shadow_hash);
     
     //Checking if loadpasswd was succesfull
-    int npasswd = loadpasswd(&filename);
+    int npasswd = loadpasswd(filename);
     if(npasswd == -1){
         return 1;
     }
@@ -168,7 +178,6 @@ int main(int argc, char* argv[]){
         pthread_join(cons_threads[i],NULL);
     }
 
-    
     if(!password_found){
         printf("Password not found!\n");
     }
