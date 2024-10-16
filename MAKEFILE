@@ -1,5 +1,19 @@
-compile: pick_my_password.c
-	gcc -o pick_my_password.o pick_my_password.c 
+# Nome do binário final
+TARGET = pick_my_password
 
-clean: 
-	rm -rf *.o
+# Compilador
+CC = gcc
+
+# Flags de compilação
+CFLAGS = -Wall -pthread -lcrypt
+
+# Arquivo fonte
+SRC = pick_my_password.c
+
+# Gera o binário final
+$(TARGET): $(SRC)
+	$(CC) -o $(TARGET) $(SRC) $(CFLAGS)
+
+# Limpa arquivos gerados
+clean:
+	rm -f $(TARGET)
