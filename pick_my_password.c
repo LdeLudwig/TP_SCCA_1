@@ -24,7 +24,6 @@ char *buffer[BUFFER_SIZE];
 int buffer_index;
 
 
-
 int loadpasswd(const char* filename){
     char passwd[MAX_PASSWORD_LENGTH];
     FILE* file = fopen(filename, "r");
@@ -65,15 +64,33 @@ void *producer(void *arg){
         sem_signal(&empty); // Notifica consumidores
         pthread_mutex_unlock(&mutex);
     }
+
+    return NULL;
 }
 
 void *consumer(void *arg){
+    while(!password_found){
+        pthread_mutex_lock(&mutex);
+        while(count == 0 && !password_found){
+            sem_wait(&empty);
+        }
+
+        if(password_found){
+            pthread_mutex_unlock(&mutex);
+        }
+    }
+
+    char *password = *(char *)buffer[buffer_index - count + BUFFER_SIZE] % BUFFER_SIZE;
+
+    
+
 
 }
 
 int main(int argc, char* argv[]){
     //producer thread
     pthread_t prod_thread;
+    
 
     //Get dictionary name
     char filename = *(char *) argv[2];
@@ -106,13 +123,14 @@ int main(int argc, char* argv[]){
     salt[11] = '\0'; // Ensure null termintation
 
     for (int i=0; i<npasswd; i++){
-        //Utilizar crypt_r() aqui
-        char *new_hash = crypt(password_list[i], salt);
-        if(strcmp(shadow_hash, new_hash) == 0){
-            printf("Password found: %s\n", password_list[i]);
-            return 0;
+            //Utilizar crypt_r() aqui
+            char *new_hash = crypt(password_list[i], salt);
+            if(strcmp(shadow_hash, new_hash) == 0){
+                printf("Password found: %s\n", password_list[i]);
+                password_found = 1;
+            }
         }
-    }
+    
 
     printf("Password not found!");
 
