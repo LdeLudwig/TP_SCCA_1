@@ -1,18 +1,6 @@
-# Nome do binário final
-TARGET = pick_my_password
-
-# Compilador
-CC = gcc
-
-# Flags de compilação
-CFLAGS = -Wall -pthread -lcrypt
-
-# Arquivo fonte
-SRC = pick_my_password.c
-
-# Gera o binário final
-$(TARGET): $(SRC)
-	$(CC) -o $(TARGET) $(SRC) $(CFLAGS)
+# compile
+compile: pick_my_password.c
+	gcc -o pick pick_my_password.c -Wall -lpthread -lcrypt
 
 # Limpa arquivos gerados
 clean:
