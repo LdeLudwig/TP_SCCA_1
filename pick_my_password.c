@@ -7,9 +7,9 @@
 
 #define MAX_PASSWORDS 15000000
 #define MAX_PASSWORD_LENGTH 128
-#define BUFFER_SIZE 1000
+#define BUFFER_SIZE 10000
 #define PASSWD_FOUND_LIST 500
-
+#define MAX_HASHS 600
 
 int num_consumers;
 int password_found = 0;
@@ -22,162 +22,210 @@ pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 sem_t full;
 sem_t empty;
 
-
 char **password_list;
-char *buffer[BUFFER_SIZE];
-int buffer_index = 0;
+char **hash_list;
 
-char *shadow_hash;
-char salt[12];
+char *buffer[BUFFER_SIZE];
+int buffer_in = 0; // Index para inserir no buffer
+int buffer_out = 0; // Index para remover do buffer
+
+char *shadow_hash;  // Essa variável precisa ser inicializada corretamente
 struct crypt_data encrypted_data;
 
-//list to store found passwords
+// List to store found passwords
 char *passwd_found[PASSWD_FOUND_LIST];
 int passwd_found_index = 0;
 
-int loadpasswd(const char* filename){
+// Função para carregar a lista de senhas ou hashes
+int loadpasswd(const char* filename) {
     char passwd[MAX_PASSWORD_LENGTH];
+    char hash[MAX_PASSWORD_LENGTH];
+
     FILE* file = fopen(filename, "r");
 
-    if(file == NULL){
+    if (file == NULL) {
         perror("fopen():");
         return -1;
     }
-    password_list = malloc(MAX_PASSWORDS * sizeof(char *));
 
-    int i = 0;
-
-    while(i < MAX_PASSWORDS && fgets(passwd, MAX_PASSWORD_LENGTH, file) != NULL){
-        passwd[strcspn(passwd,"\n")] = 0; // Remove newline
-        password_list[i] = strdup(passwd);
-        i++;
-    }
-
-    fclose(file);
-    return i;
-}
-
-void *producer(void *arg){
-    int npasswd = *(int *) arg;
-
-    for(int i = 0; i < npasswd; i++){
-        pthread_mutex_lock(&mutex);
-        sem_wait(&empty);
-        while(count == BUFFER_SIZE){
-            sem_post(&empty); // Notify consumers
-            sem_wait(&full); // Producer wait until buffer be empty
+    if (strcmp(filename, "hashes.txt") == 0) {
+        hash_list = malloc(MAX_HASHS * sizeof(char *));
+        if (hash_list == NULL) {
+            perror("malloc():");
+            fclose(file);
+            return -1;
+        }
+        int i = 0;
+        while (i < MAX_HASHS && fgets(hash, MAX_PASSWORD_LENGTH, file) != NULL) {
+            hash[strcspn(hash, "\n")] = 0;
+            hash_list[i] = strdup(hash);
+            if (hash_list[i] == NULL) {
+                perror("strdup():");
+                fclose(file);
+                return -1;
+            }
+            i++;
         }
 
-        // Put passwd in the buffer
-        buffer[buffer_index] = password_list[i];
-        buffer_index = (buffer_index + 1) % BUFFER_SIZE;
+        fclose(file);
+        return i;
+
+    } else {
+        password_list = malloc(MAX_PASSWORDS * sizeof(char *));
+        if (password_list == NULL) {
+            perror("malloc():");
+            fclose(file);
+            return -1;
+        }
+
+        int i = 0;
+        while (i < MAX_PASSWORDS && fgets(passwd, MAX_PASSWORD_LENGTH, file) != NULL) {
+            passwd[strcspn(passwd, "\n")] = 0; // Remove newline
+            password_list[i] = strdup(passwd);
+            if (password_list[i] == NULL) {
+                perror("strdup():");
+                fclose(file);
+                return -1;
+            }
+            i++;
+        }
+
+        fclose(file);
+        return i;
+    }
+}
+
+// Produtor coloca senhas no buffer
+void *producer(void *arg) {
+    int npasswd = *(int *)arg;
+
+    for (int i = 0; i < npasswd; i++) {
+        sem_wait(&empty); // Espera espaço no buffer
+        pthread_mutex_lock(&mutex);
+
+        // Coloca a senha no buffer
+        buffer[buffer_in] = password_list[i];
+        buffer_in = (buffer_in + 1) % BUFFER_SIZE;
         count++;
 
-        // Notify consumers
-        sem_post(&empty);
-
         pthread_mutex_unlock(&mutex);
+        sem_post(&full);  // Sinaliza que há dados no buffer
     }
 
     return NULL;
 }
 
-void *consumer(void *arg){
-    while(!password_found){
+// Consumidor verifica senhas
+void *consumer(void *arg) {
+    int nhashes = *(int *)arg;
+
+    while (!password_found) {
+        sem_wait(&full); // Espera dados no buffer
         pthread_mutex_lock(&mutex);
-        while(count == 0 && !password_found){
-            sem_wait(&empty);
+
+        if (password_found) { // Se a senha foi encontrada, sai
+            pthread_mutex_unlock(&mutex);
             sem_post(&full);
+            break;
         }
 
-        if(password_found){
-            pthread_mutex_unlock(&mutex);
-        }
-        
-        //geting password from buffer
-        char password = *(char *)buffer[buffer_index - count + BUFFER_SIZE] % BUFFER_SIZE;
+        // Pega a senha do buffer
+        char *password = buffer[buffer_out];
+        buffer_out = (buffer_out + 1) % BUFFER_SIZE;
         count--;
 
-        //The password hash from the shadow file (user-provided example)
         pthread_mutex_unlock(&mutex);
+        sem_post(&empty); // Sinaliza que há espaço no buffer
 
-        //Notify producer
-        sem_post(&full);
-
-        //Setting crypt_data to 0;
+        // Configura o `crypt_data` para 0
         encrypted_data.initialized = 0;
 
-        // Extracting the salt from the shadow_hash, it includes "$1$"
-        strncpy(salt, shadow_hash, 11);
-        salt[11] = '\0'; // Ensure null termintation
-        
-        //Utilizar crypt_r() aqui
-        char *new_hash = crypt_r(&password, salt, &encrypted_data);
+        for (int i = 0; i < nhashes; i++) {
+            // Extrai o salt do `shadow_hash`
+            strncpy(salt, shadow_hash, 11);  // Verificar se shadow_hash está inicializado corretamente
+            salt[11] = '\0'; // Garante terminação correta
 
-        if(strcmp(shadow_hash, new_hash) == 0){
-                printf("Password found: %s\n", &password);
+            // Utiliza `crypt_r` para gerar o hash
+            char *new_hash = crypt_r(password, salt, &encrypted_data);
+
+            // Compara o hash gerado com o `shadow_hash`
+            if (strcmp(shadow_hash, new_hash) == 0) {
+                printf("Senha encontrada: %s\n", password);
                 password_found = 1;
 
-                // Putting found password in a buffer  
-                passwd_found[passwd_found_index] = &password;
+                pthread_mutex_lock(&mutex);
+                passwd_found[passwd_found_index] = strdup(password);
                 passwd_found_index++;
+                pthread_mutex_unlock(&mutex);
+
                 break;
             }
-        return NULL;
+        }
     }
+    return NULL;
 }
 
-int main(int argc, char* argv[]){
-
-    //Checking number of args
-    if(argc < 3){
-        printf("Usage: %s <hash> <dict file>\n", argv[0]);
+int main(int argc, char* argv[]) {
+    if (argc < 3) {
+        printf("Uso: %s <hash> <arquivo dicionário>\n", argv[0]);
         return 1;
     }
 
-    //Getting dict name
-    char filename = *(char *) argv[2];
-
-    //Getting number of consumers
-    int num_consumers = atoi(argv[1]);
-
-    //Setting number of threads as shadow_hash to add in salt string
-    shadow_hash = argv[1];
-    
-    //Checking if loadpasswd was succesfull
-    int npasswd = loadpasswd(&filename);
-    if(npasswd == -1){
+    // Inicializa o shadow_hash com o hash fornecido
+    shadow_hash = strdup(argv[1]);  // Inicialização correta do shadow_hash
+    if (shadow_hash == NULL) {
+        perror("strdup():");
         return 1;
     }
 
-    //producer thread
+    char *filename = argv[2];
+    printf("Usando dicionário: %s\n", filename);
+
+    num_consumers = atoi(argv[1]);
+
+    // Carrega senhas
+    int npasswd = loadpasswd(filename);
+    if (npasswd == -1) {
+        return 1;
+    }
+
+    // Carrega hashes
+    int nhashes = loadpasswd("hashes.txt");
+    if (nhashes == -1) {
+        return 1;
+    }
+
+    // Inicializa semáforos
+    sem_init(&full, 0, 0); // Nenhum slot cheio
+    sem_init(&empty, 0, BUFFER_SIZE); // Todos os slots vazios
+
+    // Cria thread produtora
     pthread_t prod_thread;
     pthread_create(&prod_thread, NULL, producer, &npasswd);
 
-    //multiples consumer threads
+    // Cria threads consumidoras
     pthread_t cons_threads[num_consumers];
-    for(int i=0; i < num_consumers; i++){
-        pthread_create(&cons_threads[i], NULL, consumer, NULL);
+    for (int i = 0; i < num_consumers; i++) {
+        pthread_create(&cons_threads[i], NULL, consumer, &nhashes);
     }
 
-    //Waiting until producer thread finish fulfill the buffer
+    // Espera a produtora terminar
     pthread_join(prod_thread, NULL);
 
-    //Waiting until consumer threads finish empty the buffer
-    for(int i=0; i<num_consumers ; i++){
-        pthread_join(cons_threads[i],NULL);
+    // Espera as consumidoras terminarem
+    for (int i = 0; i < num_consumers; i++) {
+        pthread_join(cons_threads[i], NULL);
     }
 
-    
-    if(!password_found){
-        printf("Password not found!\n");
+    if (!password_found) {
+        printf("Senha não encontrada!\n");
     }
 
-    //freeing memory of passwordlist as producer take a batch of password on rockyou.txt
-    for(int i=0; i<npasswd; i++){
+    // Libera memória alocada
+    for (int i = 0; i < npasswd; i++) {
         free(password_list[i]);
     }
-    free(password_list);
+    free(password_list);  // Liberar a memória do shadow_hash
 
     return 0;
-}   
+}
