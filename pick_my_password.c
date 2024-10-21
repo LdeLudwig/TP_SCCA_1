@@ -107,10 +107,11 @@ void *producer(void *arg) {
         buffer[buffer_in] = password_list[i];
         buffer_in = (buffer_in + 1) % BUFFER_SIZE;
         count++;
-
+        
         pthread_mutex_unlock(&mutex);
         sem_post(&full);  // Sinaliza que há dados no buffer
     }
+    
 
     return NULL;
 }
@@ -119,14 +120,13 @@ void *producer(void *arg) {
 void *consumer(void *arg) {
     int nhashes = *(int *)arg;
 
-    while (!password_found) {
+    while (1) {
         sem_wait(&full); // Espera dados no buffer
         pthread_mutex_lock(&mutex);
 
-        if (password_found) { // Se a senha foi encontrada, sai
+        if (passwd_found || buffer_out == BUFFER_SIZE) { // Se a senha foi encontrada, sai
             pthread_mutex_unlock(&mutex);
             sem_post(&full);
-            break;
         }
 
         // Pega a senha do buffer
@@ -135,12 +135,15 @@ void *consumer(void *arg) {
         count--;
 
         pthread_mutex_unlock(&mutex);
+        if(buffer_out == BUFFER_SIZE){
         sem_post(&empty); // Sinaliza que há espaço no buffer
+        }
 
         // Configura o `crypt_data` para 0
         encrypted_data.initialized = 0;
 
         for (int i = 0; i < nhashes; i++) {
+            shadow_hash = hash_list[i];
             // Extrai o salt do `shadow_hash`
             strncpy(salt, shadow_hash, 11);  // Verificar se shadow_hash está inicializado corretamente
             salt[11] = '\0'; // Garante terminação correta
@@ -152,14 +155,11 @@ void *consumer(void *arg) {
             if (strcmp(shadow_hash, new_hash) == 0) {
                 printf("Senha encontrada: %s\n", password);
                 password_found = 1;
-
-                pthread_mutex_lock(&mutex);
-                passwd_found[passwd_found_index] = strdup(password);
-                passwd_found_index++;
-                pthread_mutex_unlock(&mutex);
-
-                break;
-            }
+            } /* else{
+                printf("password used: %s\n", password);
+                printf("password not found: %s\n", new_hash);
+                printf("hash to compare: %s\n", shadow_hash);
+            } */
         }
     }
     return NULL;
@@ -168,13 +168,6 @@ void *consumer(void *arg) {
 int main(int argc, char* argv[]) {
     if (argc < 3) {
         printf("Uso: %s <hash> <arquivo dicionário>\n", argv[0]);
-        return 1;
-    }
-
-    // Inicializa o shadow_hash com o hash fornecido
-    shadow_hash = strdup(argv[1]);  // Inicialização correta do shadow_hash
-    if (shadow_hash == NULL) {
-        perror("strdup():");
         return 1;
     }
 
