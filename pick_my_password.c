@@ -3,6 +3,7 @@
 #include <crypt.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <stdbool.h>
 #include <semaphore.h>
 
 #define MAX_PASSWORDS 15000000
@@ -12,7 +13,6 @@
 #define MAX_HASHS 600
 
 int num_consumers;
-int password_found = 0;
 int count = 0;
 
 char salt[12];
@@ -32,9 +32,6 @@ int buffer_out = 0; // Index para remover do buffer
 char *shadow_hash;  // Essa variável precisa ser inicializada corretamente
 struct crypt_data encrypted_data;
 
-// List to store found passwords
-char *passwd_found[PASSWD_FOUND_LIST];
-int passwd_found_index = 0;
 
 // Função para carregar a lista de senhas ou hashes
 int loadpasswd(const char* filename) {
@@ -119,12 +116,13 @@ void *producer(void *arg) {
 // Consumidor verifica senhas
 void *consumer(void *arg) {
     int nhashes = *(int *)arg;
+    bool password_found = false;
 
     while (1) {
         sem_wait(&full); // Espera dados no buffer
         pthread_mutex_lock(&mutex);
 
-        if (passwd_found || buffer_out == BUFFER_SIZE) { // Se a senha foi encontrada, sai
+        if (password_found == true) { // Se a senha foi encontrada, sai
             pthread_mutex_unlock(&mutex);
             sem_post(&full);
         }
@@ -137,6 +135,7 @@ void *consumer(void *arg) {
         pthread_mutex_unlock(&mutex);
         if(buffer_out == BUFFER_SIZE){
         sem_post(&empty); // Sinaliza que há espaço no buffer
+        break;
         }
 
         // Configura o `crypt_data` para 0
@@ -154,8 +153,9 @@ void *consumer(void *arg) {
             // Compara o hash gerado com o `shadow_hash`
             if (strcmp(shadow_hash, new_hash) == 0) {
                 printf("Senha encontrada: %s\n", password);
-                password_found = 1;
-            } /* else{
+                password_found = true;
+                break;
+            }/*  else{
                 printf("password used: %s\n", password);
                 printf("password not found: %s\n", new_hash);
                 printf("hash to compare: %s\n", shadow_hash);
@@ -209,16 +209,6 @@ int main(int argc, char* argv[]) {
     for (int i = 0; i < num_consumers; i++) {
         pthread_join(cons_threads[i], NULL);
     }
-
-    if (!password_found) {
-        printf("Senha não encontrada!\n");
-    }
-
-    // Libera memória alocada
-    for (int i = 0; i < npasswd; i++) {
-        free(password_list[i]);
-    }
-    free(password_list);  // Liberar a memória do shadow_hash
 
     return 0;
 }
